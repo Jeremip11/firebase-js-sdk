@@ -1,3 +1,7 @@
+import {
+  WatchStreamListener,
+  WriteStreamListener
+} from './persistent_stream';
 /**
  * Copyright 2017 Google Inc.
  *
@@ -54,21 +58,27 @@ export class Datastore {
     private serializer: JsonProtoSerializer
   ) {}
 
-  newPersistentWriteStream(): PersistentWriteStream {
+  newPersistentWriteStream(
+    listener: WriteStreamListener
+  ): PersistentWriteStream {
     return new PersistentWriteStream(
       this.queue,
       this.connection,
       this.credentials,
-      this.serializer
+      this.serializer,
+      listener
     );
   }
 
-  newPersistentWatchStream(): PersistentListenStream {
+  newPersistentWatchStream(
+    listener: WatchStreamListener
+  ): PersistentListenStream {
     return new PersistentListenStream(
       this.queue,
       this.connection,
       this.credentials,
-      this.serializer
+      this.serializer,
+      listener
     );
   }
 
