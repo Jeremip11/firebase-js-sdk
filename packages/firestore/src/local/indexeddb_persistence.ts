@@ -66,8 +66,6 @@ const CLIENT_METADATA_MAX_AGE_MS = 5000;
  * if they're already performing an IndexedDB operation.
  */
 const CLIENT_METADATA_REFRESH_INTERVAL_MS = 4000;
-/** LocalStorage location to indicate a zombied client id (see class comment). */
-const ZOMBIED_PRIMARY_LOCALSTORAGE_SUFFIX = 'zombiedClientId';
 /** User-facing error when the primary lease is required but not available. */
 const PRIMARY_LEASE_LOST_ERROR_MSG =
   'The current tab is not in the required state to perform this operation. ' +
@@ -80,6 +78,10 @@ const UNSUPPORTED_PLATFORM_ERROR_MSG =
   'This platform is either missing' +
   ' IndexedDB or is known to have an incomplete implementation. Offline' +
   ' persistence has been disabled.';
+
+// The format of the LocalStorage key that stores zombied client is:
+//     firestore_zombie_<persistence_prefix>_<instance_key>
+const ZOMBIED_CLIENTS_KEY_PREFIX = 'firestore_zombie';
 
 /**
  * An IndexedDB-backed instance of Persistence. Data is stored persistently
@@ -126,7 +128,6 @@ export class IndexedDbPersistence implements Persistence {
   private started: boolean;
   private isPrimary = false;
   private dbName: string;
-  private localStoragePrefix: string;
 
   /**
    * Set to an Error object if we encounter an unrecoverable error. All further
@@ -152,15 +153,14 @@ export class IndexedDbPersistence implements Persistence {
   private primaryStateListener: PrimaryStateListener = _ => Promise.resolve();
 
   constructor(
-    prefix: string,
+    private readonly persistenceKey: string,
     private readonly clientId: ClientId,
     platform: Platform,
     private readonly queue: AsyncQueue,
     serializer: JsonProtoSerializer
   ) {
-    this.dbName = prefix + IndexedDbPersistence.MAIN_DATABASE;
+    this.dbName = persistenceKey + IndexedDbPersistence.MAIN_DATABASE;
     this.serializer = new LocalSerializer(serializer);
-    this.localStoragePrefix = prefix;
     this.document = platform.document;
     this.window = platform.window;
   }
@@ -283,7 +283,7 @@ export class IndexedDbPersistence implements Persistence {
         const currentLeaseIsValid =
           currentPrimary !== null &&
           this.isWithinMaxAge(currentPrimary.leaseTimestampMs) &&
-          currentPrimary.ownerId !== this.getZombiedClientId();
+          !this.isClientZombied(currentPrimary.ownerId);
 
         if (currentLeaseIsValid) {
           if (this.isLocalClient(currentPrimary)) {
@@ -326,7 +326,8 @@ export class IndexedDbPersistence implements Persistence {
             if (this.clientId !== value.clientId) {
               if (
                 this.isWithinMaxAge(value.updateTimeMs) &&
-                value.inForeground
+                value.inForeground &&
+                !this.isClientZombied(value.clientId)
               ) {
                 canActAsPrimary = false;
                 control.done();
@@ -352,9 +353,6 @@ export class IndexedDbPersistence implements Persistence {
     if (!this.started) {
       return Promise.resolve();
     }
-    // TODO(multitab): Similar to the zombied client ID, we should write an
-    // entry to Local Storage first to indicate that we are no longer alive.
-    // This will help us when the shutdown handler doesn't run to completion.
     this.started = false;
     if (this.clientMetadataRefresher) {
       this.clientMetadataRefresher.cancel();
@@ -364,6 +362,9 @@ export class IndexedDbPersistence implements Persistence {
     await this.releasePrimaryLeaseIfHeld();
     await this.removeClientMetadata();
     this.simpleDb.close();
+    // Remove the entry marking the client as zombied from LocalStorage since
+    // we successfully deleted its metadata from IndexedDb.
+    this.removeClientZombiedEntry();
     if (deleteData) {
       await SimpleDb.delete(this.dbName);
     }
@@ -458,7 +459,7 @@ export class IndexedDbPersistence implements Persistence {
       const currentLeaseIsValid =
         currentPrimary !== null &&
         this.isWithinMaxAge(currentPrimary.leaseTimestampMs) &&
-        currentPrimary.ownerId !== this.getZombiedClientId();
+        !this.isClientZombied(currentPrimary.ownerId);
 
       if (currentLeaseIsValid && !this.isLocalClient(currentPrimary)) {
         if (!currentPrimary.allowTabSynchronization) {
@@ -591,9 +592,7 @@ export class IndexedDbPersistence implements Persistence {
         // Note: In theory, this should be scheduled on the AsyncQueue since it
         // accesses internal state. We execute this code directly during shutdown
         // to make sure it gets a chance to run.
-        if (this.isPrimary) {
-          this.setZombiedClientId(this.clientId);
-        }
+        this.markClientZombied();
 
         this.queue.enqueue(() => {
           // Attempt graceful shutdown (including releasing our owner lease), but
@@ -621,7 +620,7 @@ export class IndexedDbPersistence implements Persistence {
    * zombied due to their tab closing) from LocalStorage, or null if no such
    * record exists.
    */
-  private getZombiedClientId(): ClientId | null {
+  private isClientZombied(clientId: ClientId): boolean {
     if (this.window.localStorage === undefined) {
       assert(
         process.env.USE_MOCK_PERSISTENCE === 'YES',
@@ -631,15 +630,15 @@ export class IndexedDbPersistence implements Persistence {
     }
 
     try {
-      const zombiedClientId = this.window.localStorage.getItem(
-        this.zombiedClientLocalStorageKey()
-      );
+      const isZombied =
+        this.window.localStorage.getItem(
+          this.zombiedClientLocalStorageKey(clientId)
+        ) !== null;
       log.debug(
         LOG_TAG,
-        'Zombied clientId from LocalStorage:',
-        zombiedClientId
+        `Client ${isZombied ? 'is' : 'is not'} zombied in LocalStorage`
       );
-      return zombiedClientId;
+      return isZombied;
     } catch (e) {
       // Gracefully handle if LocalStorage isn't available / working.
       log.error(LOG_TAG, 'Failed to get zombied client id.', e);
@@ -648,29 +647,35 @@ export class IndexedDbPersistence implements Persistence {
   }
 
   /**
-   * Records a zombied primary client (a primary client that had its tab closed)
-   * in LocalStorage or, if passed null, deletes any recorded zombied owner.
+   * Record client as zombied (a client that had its tab closed). Zombied
+   * clients are ignored during primary tab selection.
    */
-  private setZombiedClientId(zombiedClientId: ClientId | null): void {
+  private markClientZombied(): void {
     try {
-      if (zombiedClientId === null) {
-        this.window.localStorage.removeItem(
-          this.zombiedClientLocalStorageKey()
-        );
-      } else {
-        this.window.localStorage.setItem(
-          this.zombiedClientLocalStorageKey(),
-          zombiedClientId
-        );
-      }
+      // TODO(multitab): Garbage Collect Local Storage
+      this.window.localStorage.setItem(
+        this.zombiedClientLocalStorageKey(this.clientId),
+        String(Date.now())
+      );
     } catch (e) {
       // Gracefully handle if LocalStorage isn't available / working.
       log.error('Failed to set zombie owner id.', e);
     }
   }
 
-  private zombiedClientLocalStorageKey(): string {
-    return this.localStoragePrefix + ZOMBIED_PRIMARY_LOCALSTORAGE_SUFFIX;
+  /** Removes the zombied client entry if it exists. */
+  private removeClientZombiedEntry(): void {
+    try {
+      this.window.localStorage.removeItem(
+        this.zombiedClientLocalStorageKey(this.clientId)
+      );
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  private zombiedClientLocalStorageKey(clientId: ClientId): string {
+    return `${ZOMBIED_CLIENTS_KEY_PREFIX}_${this.persistenceKey}_${clientId}`;
   }
 }
 
