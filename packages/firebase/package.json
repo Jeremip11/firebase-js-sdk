@@ -28,7 +28,9 @@
   "scripts": {
     "build": "rollup -c",
     "dev": "rollup -c -w",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "snyk-protect": "snyk protect",
+    "prepublish": "npm run snyk-protect"
   },
   "main": "dist/index.node.cjs.js",
   "browser": "dist/index.cjs.js",
@@ -42,7 +44,8 @@
     "@firebase/functions": "0.3.0",
     "@firebase/messaging": "0.3.5",
     "@firebase/polyfill": "0.3.3",
-    "@firebase/storage": "0.2.3"
+    "@firebase/storage": "0.2.3",
+    "snyk": "^1.189.0"
   },
   "devDependencies": {
     "rollup": "0.57.1",
@@ -52,5 +55,6 @@
     "rollup-plugin-uglify": "3.0.0",
     "typescript": "2.8.1"
   },
-  "typings": "dist/index.d.ts"
+  "typings": "dist/index.d.ts",
+  "snyk": true
 }
