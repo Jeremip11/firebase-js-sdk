@@ -4,10 +4,13 @@
   "version": "0.2.1",
   "scripts": {
     "pretest": "mkdirp dist && browserify src/namespace.test.js -o dist/namespace.test.js",
-    "test": "karma start --single-run"
+    "test": "karma start --single-run",
+    "snyk-protect": "snyk protect",
+    "prepublish": "npm run snyk-protect"
   },
   "dependencies": {
-    "firebase": "5.2.0"
+    "firebase": "5.2.0",
+    "snyk": "^1.189.0"
   },
   "devDependencies": {
     "@babel/core": "7.0.0-beta.47",
@@ -23,5 +26,6 @@
     "karma-spec-reporter": "0.0.32",
     "mkdirp": "0.5.1",
     "mocha": "5.0.5"
-  }
+  },
+  "snyk": true
 }
