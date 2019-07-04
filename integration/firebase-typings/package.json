@@ -3,12 +3,16 @@
   "private": true,
   "version": "0.2.1",
   "scripts": {
-    "test": "tsc index.ts --outDir dist"
+    "test": "tsc index.ts --outDir dist",
+    "snyk-protect": "snyk protect",
+    "prepublish": "npm run snyk-protect"
   },
   "dependencies": {
-    "firebase": "5.2.0"
+    "firebase": "5.2.0",
+    "snyk": "^1.189.0"
   },
   "devDependencies": {
     "typescript": "2.8.1"
-  }
+  },
+  "snyk": true
 }
