@@ -40,7 +40,7 @@
     "@firebase/database": "0.3.4",
     "@firebase/firestore": "0.5.6",
     "@firebase/functions": "0.3.0",
-    "@firebase/messaging": "0.3.5",
+    "@firebase/messaging": "0.7.3",
     "@firebase/polyfill": "0.3.3",
     "@firebase/storage": "0.2.3"
   },
