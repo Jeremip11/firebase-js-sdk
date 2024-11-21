@@ -36,7 +36,7 @@
   "react-native": "dist/index.rn.cjs.js",
   "dependencies": {
     "@firebase/app": "0.3.3",
-    "@firebase/auth": "0.7.0",
+    "@firebase/auth": "1.6.2",
     "@firebase/database": "0.3.4",
     "@firebase/firestore": "0.5.6",
     "@firebase/functions": "0.3.0",
